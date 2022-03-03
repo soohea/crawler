@@ -18,6 +18,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 public class Main {
 
@@ -35,12 +36,13 @@ public class Main {
             }
 
             if (isInterestingPage(link)) {
+                System.out.println(link);
 
                 Document doc = httpGetAndParseHtml(link);
 
                 parseUrlsFromPageAndStoreIntoDatabase(connection, doc);
 
-                storeIntoDatabaseIfIsNewsPage(doc);
+                storeIntoDatabaseIfIsNewsPage(connection, doc, link);
 
                 updateDatabase(connection, link, "INSERT INTO LINKS_ALREADY_PROCESSED (LINK) VALUES (?)");
             }
@@ -57,8 +59,16 @@ public class Main {
 
     private static void parseUrlsFromPageAndStoreIntoDatabase(Connection connection, Document doc) throws SQLException {
         for (Element aTag : doc.select("a")) {
+
             String href = aTag.attr("href");
-            updateDatabase(connection, href, "INSERT INTO LINKS_TO_BE_PROCESSED (LINK) VALUES (?)");
+
+            if (href.startsWith("//")) {
+                href = "https:" + href;
+            }
+
+            if (!href.toLowerCase().startsWith("javascript")) {
+                updateDatabase(connection, href, "INSERT INTO LINKS_TO_BE_PROCESSED (LINK) VALUES (?)");
+            }
         }
     }
 
@@ -82,7 +92,7 @@ public class Main {
     }
 
     private static String getNextLink(Connection connection, String sql) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (PreparedStatement statement = connection.prepareStatement("select LINK from LINKS_TO_BE_PROCESSED LIMIT 1")) {
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next()) {
                 return resultSet.getString(1);
@@ -91,12 +101,18 @@ public class Main {
         return null;
     }
 
-    private static void storeIntoDatabaseIfIsNewsPage(Document doc) {
+    private static void storeIntoDatabaseIfIsNewsPage(Connection connection, Document doc, String link) throws SQLException {
         ArrayList<Element> articleTags = doc.select("article");
         if (!articleTags.isEmpty()) {
             for (Element articleTag : articleTags) {
                 String title = articleTags.get(0).child(0).text();
-                System.out.println(title);
+                String content = articleTag.select("p").stream().map(Element::text).collect(Collectors.joining("\n"));
+                try (PreparedStatement statement = connection.prepareStatement("insert into NEWS(title, content, url, created_at, updated_at) values (?,?,?,now(),now() ) ")) {
+                    statement.setString(1, title);
+                    statement.setString(2, content);
+                    statement.setString(3, link);
+                    statement.executeUpdate();
+                }
             }
         }
     }
@@ -104,15 +120,11 @@ public class Main {
     private static Document httpGetAndParseHtml(String link) throws IOException {
         CloseableHttpClient httpClient = HttpClients.createDefault();
 
-        if (link.startsWith("//")) {
-            link = "https:" + link;
-            System.out.println(link);
-        }
+
         HttpGet httpGet = new HttpGet(link);
         httpGet.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36");
 
         try (CloseableHttpResponse response1 = httpClient.execute(httpGet)) {
-            System.out.println(response1.getStatusLine());
             HttpEntity entity1 = response1.getEntity();
 
             String html = EntityUtils.toString(entity1);
