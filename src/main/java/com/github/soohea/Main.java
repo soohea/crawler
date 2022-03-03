@@ -12,9 +12,12 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 
 import java.io.IOException;
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.List;
 
 public class Main {
 
@@ -23,16 +26,9 @@ public class Main {
 
         Connection connection = DriverManager.getConnection("jdbc:h2:file:E:\\projects\\crawler\\news", "root", "root");
 
-        while (true) {
-            //待处理的链接池
-            List<String> linkPool = loadUrlsFromDatabase(connection, "select LINK from LINKS_TO_BE_PROCESSED");
+        String link;
 
-            if (linkPool.isEmpty()) {
-                break;
-            }
-            //ArrayList从尾部删除更有效率
-            String link = linkPool.remove(linkPool.size() - 1);
-            insertIntoDatabase(connection, link, "DELETE FROM LINKS_TO_BE_PROCESSED WHERE LINK = ?");
+        while ((link = getNextLinkAndDelete(connection)) != null) {
 
             if (isLinkProcessed(connection, link)) {
                 continue;
@@ -46,15 +42,23 @@ public class Main {
 
                 storeIntoDatabaseIfIsNewsPage(doc);
 
-                insertIntoDatabase(connection, link, "INSERT INTO LINKS_ALREADY_PROCESSED (LINK) VALUES (?)");
+                updateDatabase(connection, link, "INSERT INTO LINKS_ALREADY_PROCESSED (LINK) VALUES (?)");
             }
         }
+    }
+
+    private static String getNextLinkAndDelete(Connection connection) throws SQLException {
+        String link = getNextLink(connection, "select LINK from LINKS_TO_BE_PROCESSED LIMIT 1");
+        if (link != null) {
+            updateDatabase(connection, link, "DELETE FROM LINKS_TO_BE_PROCESSED WHERE LINK = ?");
+        }
+        return link;
     }
 
     private static void parseUrlsFromPageAndStoreIntoDatabase(Connection connection, Document doc) throws SQLException {
         for (Element aTag : doc.select("a")) {
             String href = aTag.attr("href");
-            insertIntoDatabase(connection, href, "INSERT INTO LINKS_TO_BE_PROCESSED (LINK) VALUES (?)");
+            updateDatabase(connection, href, "INSERT INTO LINKS_TO_BE_PROCESSED (LINK) VALUES (?)");
         }
     }
 
@@ -70,22 +74,21 @@ public class Main {
 
     }
 
-    private static void insertIntoDatabase(Connection connection, String link, String sql) throws SQLException {
+    private static void updateDatabase(Connection connection, String link, String sql) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, link);
             statement.executeUpdate();
         }
     }
 
-    private static List<String> loadUrlsFromDatabase(Connection connection, String sql) throws SQLException {
-        List<String> results = new ArrayList<>();
+    private static String getNextLink(Connection connection, String sql) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next()) {
-                results.add(resultSet.getString(1));
+                return resultSet.getString(1);
             }
         }
-        return results;
+        return null;
     }
 
     private static void storeIntoDatabaseIfIsNewsPage(Document doc) {
